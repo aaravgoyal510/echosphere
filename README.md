@@ -17,7 +17,7 @@ graph TD
         TTS -->|PCM Audio output| OutputAudio[Audio Playback / Phone Bridge]
     end
 
-    subgraph Decision & Integrity
+    subgraph DecisionAndIntegrity ["Decision & Integrity"]
         Coordinator -->|Utterance + History| DM[Dialogue Manager]
         DM -->|Prompt + Tools| LLM[LLM Client: gpt-4o-mini]
         LLM -->|Draft response| Guardrail[Anti-Hallucination Guardrail]
@@ -28,7 +28,7 @@ graph TD
         DM -->|Qualification| CRM[CRM Adapter / HubSpot]
     end
 
-    subgraph Interruption (Barge-in)
+    subgraph Interruption ["Interruption (Barge-in)"]
         CustomerAudio -->|Speech detected| TTM[Turn Taking Manager]
         TTM -->|Interrupt trigger| Coordinator
         Coordinator -->|1. Cancel in-flight task| LLM
