@@ -104,4 +104,4 @@ This is NOT a scripted IVR bot and NOT a simple chatbot with TTS bolted on. The 
 
 ## 9. Deliverables for This Build
 See companion documents: `AppFlow.md`, `Design.md`, `Schema.md`, `TechSpec.md`, `ImplementationPlan.md`.
-tota.aarav1510@gmail.com
+total.aarav1510@gmail.com
