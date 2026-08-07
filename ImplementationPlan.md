@@ -43,12 +43,12 @@
 - Expand CRM/calendar provider adapters as needed.
 
 ## Testing Checklist (carried from TechSpec.md §10, tracked per phase)
-- [ ] Barge-in stop latency < 250ms (Phase 0)
-- [ ] Memory recall across 10+ turn gap (Phase 1)
-- [ ] Zero unverified numeric claims in red-team suite (Phase 2)
-- [ ] Requirement-change re-pricing works live (Phase 3)
-- [ ] All 4 outcome paths automated and passing (Phase 4)
-- [ ] Full PRD §6 example scenario passes as an automated regression test (Phase 4, gate for Phase 5 start)
+- [x] Barge-in stop latency < 250ms (Phase 0)
+- [x] Memory recall across 10+ turn gap (Phase 1)
+- [x] Zero unverified numeric claims in red-team suite (Phase 2)
+- [x] Requirement-change re-pricing works live (Phase 3)
+- [x] All 4 outcome paths automated and passing (Phase 4)
+- [x] Full PRD §6 example scenario passes as an automated regression test (Phase 4, gate for Phase 5 start)
 - [ ] P95 end-to-end latency within budget at target load (Phase 5)
 - [ ] Escalation precision ≥85%, recall ≥90% on labeled test set (Phase 5/6)
 

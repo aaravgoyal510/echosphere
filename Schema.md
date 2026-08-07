@@ -26,7 +26,7 @@ interface SessionState {
     triggered_at_turn?: number;
   };
 
-  outcome?: "meeting_booked" | "follow_up_scheduled" | "disqualified" | "in_progress";
+  outcome?: "meeting_booked" | "follow_up_scheduled" | "disqualified" | "escalated" | "in_progress";
 }
 
 interface TranscriptTurn {

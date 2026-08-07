@@ -42,8 +42,11 @@ graph TD
 
 1. **Sub-250ms Barge-In Interruption:** When the customer speaks, the `TurnTakingManager` detects the energy/VAD threshold, cancels the active dialogue generation task, and flushes the Piper synthesis queue within ~200ms to stop the agent mid-sentence.
 2. **Anti-Hallucination Guardrails:** If the LLM mentions a price, feature, or promotion that was not explicitly returned by a database tool query on the current turn, the guardrail rejects the draft response and forces a regeneration.
-3. **Graceful Outage Escalation:** If the LLM connection fails or hits rate limits, the pipeline coordinador catches the error, sets the call state to `"escalated"` in the database to prevent silent state mismatches, and triggers a fallback TTS message: *"I'm sorry, I'm having a technical issue looking up that information. Let me transfer you to a human agent."*
-4. **Dynamic LLM Provider & Local Fallback:** Routes queries to **GitHub Models (`gpt-4o-mini`)** or **Groq (`llama-3.3-70b`)**. If rate-limited (429), it automatically routes queries to a local **Ollama (`qwen2.5:1.5b`)** model.
+3. **Google Calendar Adapter:** Features live Google Calendar integration with timezone lookup and availability overlap checking. Fully implements fallback to local SQLite tables (`available_slots` and `bookings`) if credentials are missing or API calls fail at runtime.
+4. **Escalation Policy Engine:** Dynamically checks customer turns against escalation rules (large team size $\ge 100$, human keywords, $\ge 3$ unresolved objections, sentiment anger, or $\ge 3$ guardrail blocks) and routes calls to `"warm_transfer"` or `"async_handoff"` (creating follow-up task context in the CRM) based on business hours.
+5. **Outcome Resolution & Logging:** End-of-call paths mapped to distinct outcome states (`meeting_booked`, `follow_up_scheduled`, `disqualified`, `escalated`). A final `CallLogEntry` is guaranteed to be saved on all exit paths.
+6. **Graceful Outage Escalation:** If the LLM connection fails or hits rate limits, the pipeline coordinator catches the error, sets the call state to `"escalated"` in the database to prevent silent state mismatches, and triggers a fallback TTS message: *"I'm sorry, I'm having a technical issue looking up that information. Let me transfer you to a human agent."*
+7. **Dynamic LLM Provider & Local Fallback:** Routes queries to **GitHub Models (`gpt-4o-mini`)** or **Groq (`llama-3.3-70b`)**. If rate-limited (429), it automatically routes queries to a local **Ollama (`qwen2.5:1.5b`)** model.
 
 ---
 
@@ -64,8 +67,12 @@ GROQ_MODEL=llama-3.3-70b-versatile
 # Fallback Configuration
 OLLAMA_MODEL=qwen2.5:1.5b
 
-# Telephony Config (For Production Handoff)
+# Telephony Config (For Handoff Handoff)
 TELEPHONY_PROVIDER=mock
+
+# Google Calendar Integration
+GOOGLE_CALENDAR_CREDENTIALS_PATH=meta-history-327812-05abc2722f5c.json
+GOOGLE_CALENDAR_ID=your_calendar_id@group.calendar.google.com
 ```
 
 ### B. Piper Voice ONNX Assets (TTS)
@@ -110,12 +117,12 @@ pip install -r requirements.txt
 ### 2. Run the Verification Tests
 To run all test harnesses and verify pipeline mechanics:
 ```bash
-# Run unit tests (including real Piper 250ms stop latency check)
-.venv\Scripts\pytest tests/test_pipeline.py tests/test_db_and_pricing.py
+# Run all tests in the repository
+.venv\Scripts\pytest -v
 
 # Run the voice pipeline simulator
 .venv\Scripts\python tests/voice_pipeline_simulator.py
 
-# Run the red-team adversarial test suite (15 turns against gpt-4o-mini)
-.venv\Scripts\python tests/test_red_team.py
+# Run the chat simulator
+.venv\Scripts\python tests/chat_simulator.py
 ```
