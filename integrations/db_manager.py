@@ -122,6 +122,28 @@ class DBManager:
                 );
             """)
 
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS available_slots (
+                    slot_id VARCHAR(50) PRIMARY KEY,
+                    slot_start VARCHAR(50) NOT NULL,
+                    slot_end VARCHAR(50) NOT NULL,
+                    meeting_type VARCHAR(50) NOT NULL,
+                    status VARCHAR(20) NOT NULL DEFAULT 'available'
+                );
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS bookings (
+                    booking_id VARCHAR(50) PRIMARY KEY,
+                    lead_id VARCHAR(50) NOT NULL,
+                    slot_start VARCHAR(50) NOT NULL,
+                    slot_end VARCHAR(50) NOT NULL,
+                    meeting_type VARCHAR(50) NOT NULL,
+                    notes TEXT,
+                    created_at VARCHAR(50) NOT NULL
+                );
+            """)
+
             # Use vector type if extension is loaded, otherwise standard float array
             embedding_type = "vector(1536)" if has_vector else "DOUBLE PRECISION[]"
             cur.execute(f"""
@@ -192,6 +214,28 @@ class DBManager:
                     objections_raised TEXT NOT NULL, -- JSON array
                     outcome TEXT NOT NULL,
                     escalation_reason TEXT
+                );
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS available_slots (
+                    slot_id TEXT PRIMARY KEY,
+                    slot_start TEXT NOT NULL,
+                    slot_end TEXT NOT NULL,
+                    meeting_type TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'available'
+                );
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS bookings (
+                    booking_id TEXT PRIMARY KEY,
+                    lead_id TEXT NOT NULL,
+                    slot_start TEXT NOT NULL,
+                    slot_end TEXT NOT NULL,
+                    meeting_type TEXT NOT NULL,
+                    notes TEXT,
+                    created_at TEXT NOT NULL
                 );
             """)
 

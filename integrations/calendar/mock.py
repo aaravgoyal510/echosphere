@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime, timedelta, timezone
 
 from dialogue_manager.models import AvailabilityWindow, MeetingBooking
@@ -66,14 +66,15 @@ class MockCalendarAdapter(CalendarAdapter):
         slot_start: str,
         slot_end: str,
         meeting_type: str,
-        attendees: List[str]
+        notes: Optional[str] = None,
+        attendees: Optional[List[str]] = None
     ) -> MeetingBooking:
         """Book a meeting on the calendar in-memory."""
         meeting_id = f"mtg_{int(datetime.now(timezone.utc).timestamp())}"
         booking = MeetingBooking(
             meeting_id=meeting_id,
             lead_id=lead_id,
-            attendees=attendees,
+            attendees=attendees or ["customer@example.com"],
             start_time=slot_start,
             end_time=slot_end,
             meeting_type=meeting_type,

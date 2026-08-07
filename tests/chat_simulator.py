@@ -64,8 +64,8 @@ def check_transcript_grounding(state: SessionState) -> bool:
 async def run_simulation():
     load_dotenv(override=True)
     
-    if not os.getenv("GITHUB_TOKEN"):
-        print("ERROR: GITHUB_TOKEN not set in .env file. Please set it before running the simulator.")
+    if not os.getenv("AICREDITS_API_KEY"):
+        print("ERROR: AICREDITS_API_KEY not set in .env file. Please set it before running the simulator.")
         sys.exit(1)
         
     print("\n======================================================================")
@@ -74,7 +74,13 @@ async def run_simulation():
 
     # 1. Initialize and Seed database (Force Postgres or fall back)
     # Check if Postgres is reachable, if not print a warning
-    db_manager = DBManager(sqlite_path="echosphere_test.db")
+    db_file = "echosphere_chat_sim.db"
+    if os.path.exists(db_file):
+        try:
+            os.remove(db_file)
+        except Exception:
+            pass
+    db_manager = DBManager(sqlite_path=db_file)
     db_manager.initialize_tables()
     await seed_database(db_manager)
     
@@ -187,11 +193,15 @@ async def run_simulation():
     print("======================================================================")
     
     crm_lead = crm_adapter.get_lead(test_phone)
+    assert crm_lead is not None, "Lead not found in database. Make sure the database was seeded and not deleted concurrently."
+    assert crm_lead.qualification is not None, "Lead has no qualification record."
     
     print(f"Asserting team size in CRM is 45...")
+    assert crm_lead.qualification.team_size is not None, "Lead qualification team_size was not updated (remained None)."
     assert crm_lead.qualification.team_size.value == 45, f"Expected 45 seats, got {crm_lead.qualification.team_size.value}"
     
     print(f"Asserting competitor HubSpot is logged in CRM...")
+    assert crm_lead.qualification.current_solution is not None, "Lead qualification current_solution was not updated (remained None)."
     assert "hubspot" in crm_lead.qualification.current_solution.value.lower(), "Expected HubSpot to be saved as current_solution"
     
     print(f"Asserting competitor objection was logged in SessionState...")

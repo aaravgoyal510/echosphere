@@ -31,8 +31,8 @@ async def run_simulation():
     global current_state
     load_dotenv(override=True)
     
-    if not os.getenv("GITHUB_TOKEN"):
-        print("ERROR: GITHUB_TOKEN not set in .env file.")
+    if not os.getenv("AICREDITS_API_KEY"):
+        print("ERROR: AICREDITS_API_KEY not set in .env file.")
         sys.exit(1)
         
     print("\n======================================================================")
@@ -40,7 +40,13 @@ async def run_simulation():
     print("======================================================================\n")
 
     # 1. Initialize DB and Seed
-    db_manager = DBManager(sqlite_path="echosphere_test.db")
+    db_file = "echosphere_voice_sim.db"
+    if os.path.exists(db_file):
+        try:
+            os.remove(db_file)
+        except Exception:
+            pass
+    db_manager = DBManager(sqlite_path=db_file)
     db_manager.initialize_tables()
     await seed_database(db_manager)
 
@@ -177,11 +183,15 @@ async def run_simulation():
     # Reload session state from DB to assert final values
     final_state = session_manager.get_session(call_id)
     crm_lead = crm_adapter.get_lead(test_phone)
+    assert crm_lead is not None, "Lead not found in database. Make sure database was seeded and not deleted concurrently."
+    assert crm_lead.qualification is not None, "Lead has no qualification record."
     
     print("Asserting team size in CRM is 45...")
+    assert crm_lead.qualification.team_size is not None, "Lead qualification team_size was not updated (remained None)."
     assert crm_lead.qualification.team_size.value == 45, f"Expected 45 seats, got {crm_lead.qualification.team_size.value}"
     
     print("Asserting competitor HubSpot is logged in CRM...")
+    assert crm_lead.qualification.current_solution is not None, "Lead qualification current_solution was not updated (remained None)."
     assert "hubspot" in crm_lead.qualification.current_solution.value.lower(), "Expected HubSpot to be saved as current_solution"
     
     print("Asserting competitor objection was logged in SessionState...")

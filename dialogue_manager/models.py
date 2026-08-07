@@ -61,13 +61,13 @@ class SessionState(BaseModel):
     topics_covered: List[TopicRef] = Field(default_factory=list)
     open_threads: List[str] = Field(default_factory=list)
     escalation: SessionEscalationState = Field(default_factory=SessionEscalationState)
-    outcome: Optional[Literal["meeting_booked", "follow_up_scheduled", "disqualified", "in_progress"]] = "in_progress"
+    outcome: Optional[Literal["meeting_booked", "follow_up_scheduled", "disqualified", "escalated", "in_progress"]] = "in_progress"
     executed_tools: List[str] = Field(default_factory=list)
 
 # Schema.md §2: Product / Pricing Knowledge Base
 class KBDocument(BaseModel):
     doc_id: str
-    type: Literal["feature_doc", "competitive_battlecard", "policy", "faq", "case_study"]
+    type: Literal["feature_doc", "competitive_battlecard", "policy", "faq", "case_study", "playbook"]
     title: str
     content: str
     competitor_name: Optional[str] = None

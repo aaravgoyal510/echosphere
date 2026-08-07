@@ -46,8 +46,15 @@ def test_pricing_lookup(db_manager):
     assert tier.onboarding_fee == 250.00
     assert "HubSpot integration" in tier.included_features
     
-    # Enterprise plan check (e.g. 50 seats)
+    # Business plan check (e.g. 50 seats)
     tier = pricing.get_pricing(50)
+    assert tier is not None
+    assert tier.tier_id == "business"
+    assert tier.price_per_seat_monthly == 25.00
+    assert tier.onboarding_fee == 250.00
+    
+    # Enterprise plan check (e.g. 55 seats)
+    tier = pricing.get_pricing(55)
     assert tier is not None
     assert tier.tier_id == "enterprise"
     assert tier.price_per_seat_monthly == 50.00

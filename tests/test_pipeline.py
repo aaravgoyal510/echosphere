@@ -145,7 +145,7 @@ async def test_tool_call_timeout_no_partial_update():
         async def query(self, *args, **kwargs):
             raise asyncio.CancelledError("Simulated timeout/cancellation")
             
-    manager.claude_client = MockTimeoutClient()
+    manager.dialogue_llm_client = MockTimeoutClient()
     
     # Run turn. Since client queries raise CancelledError, it propagates or is handled
     with pytest.raises(asyncio.CancelledError):

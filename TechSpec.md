@@ -8,7 +8,7 @@
 | VAD / turn-taking | **Silero VAD** (acoustic) + a lightweight semantic endpoint classifier | Acoustic VAD alone causes false interrupts on pauses; combine with a fast classifier that scores "is this a complete thought" on the interim transcript. |
 | Streaming STT | **Deepgram Nova-3** (streaming, interim + final results, built-in endpointing) — alt: AssemblyAI Universal-Streaming | Sub-300ms partials, diarization, confidence scores per word (used for low-confidence clarification fallback). |
 | Streaming TTS | **ElevenLabs (streaming, Flash/Turbo model)** or **Cartesia Sonic** | Both support chunked streaming with sub-200ms first-byte and mid-stream cancellation (required for barge-in). |
-| Dialogue LLM | **gpt-4o-mini (GitHub Models, free tier)** | Selected for high tool-calling reliability (100% success across qualification and objection scenarios) and a full $0 stack without requiring paid Anthropic credentials. |
+| Dialogue LLM | **openai/gpt-4o-mini (AICredits gateway)** | Deployed via the paid AICredits.in API gateway for high tool-calling reliability and consistent low-latency execution under INR/UPI billing. The paid gateway successfully replaces all free options (GitHub Models, Groq) that hit strict rate-limit ceilings. |
 | Fast extraction/classification LLM | **`gemma4:31b-cloud` (Ollama Cloud, free tier)** | Runs in parallel per turn for: intent/objection tagging, structured slot extraction, memory updates. Benchmarked against other cloud candidates (e.g. `minimax-m3:cloud` was slow/inaccurate; `deepseek-v4-flash:cloud` and `qwen3.5:cloud` required subscriptions). `gemma4:31b-cloud` was selected as the only accurate free-tier option, showing a median wall-clock latency of ~2.0s and a median internal duration of ~1.7s. To prevent network delays from blocking the active audio pipeline, a strict **1.5s timeout** is implemented in `dialogue_manager/intent_classifier.py` which gracefully falls back to empty extraction schemas if the cloud call stalls. |
 | Vector DB (product KB / RAG) | **SQLite + In-Memory Dot Product** | High-performance local similarity search, bypassing Docker/network latency completely. |
 | Structured pricing/plan data | **SQLite** | Deterministic local database, ensuring sub-millisecond lookup times. |
@@ -212,18 +212,17 @@ trigger_escalation.
 ]
 ```
 
-## 4. Extraction/Classification Design and Benchmarks (Folded vs. Parallel)
+## 4. Extraction/Classification Design and Benchmarks (AICredits Gateway Integration)
 
-To keep conversational response times fast, we target a sub-500ms budget. We benchmarked multiple free-tier and low-cost models to determine if a separate parallel extraction call was viable:
-- **Google Gemini (`gemini-1.5-flash` / `gemini-2.0-flash`):** Failed with `429 Resource Exhausted` (due to free-tier quota limits of `limit: 0` for new keys) or `404 Not Found`.
-- **GitHub Models (`gpt-4o-mini`):** Warmed up median wall-clock latency of **~1.9s** (range 1.5s–2.7s).
-- **GitHub Models (`phi-4`):** Warmed up median wall-clock latency of **~2.0s** (range 1.7s–2.3s).
-- **Ollama Cloud (`gemma4:31b-cloud`):** Warmed up median wall-clock latency of **~2.0s** (range 1.5s–2.2s).
+To keep conversational response times fast and reliable under pressure, we transitioned from free cloud tiers (which suffered from daily and minute rate limits) to a paid OpenAI-compatible gateway: **AICredits.in**. This gateway routes our queries directly to OpenAI using the model identifier **`openai/gpt-4o-mini`**.
+
+Benchmarking results across LLM endpoints during development:
+- **Free cloud tiers (Groq, GitHub Models):** Suffered from strict rate-limit ceilings (e.g. 150 requests per day on GitHub Models), making continuous E2E simulation and testing impossible.
+- **Local CPU Inference (Ollama - Qwen 2.5 1.5B):** Suffered from high tool-calling processing latency (15s–30s on CPU), leading to turn cancellations by VAD barge-ins.
+- **Paid Gateway (AICredits - openai/gpt-4o-mini):** Provides consistent ~1.5s–3.5s response latency, robust tool-calling precision, and scales without rate-limit constraints.
 
 **Final Architectural Decision:**
-Because none of the candidate models could comfortably clear the ~500ms budget (all averaging ~1.7s to ~2.3s), running a separate parallel network call would consistently exceed our latency budget or trigger defensive timeouts. 
-
-Therefore, we have **folded the intent classification and slot extraction tasks directly into the main dialogue LLM (Claude Sonnet) turn call** (or as part of its structured output/tool-calling flow). This eliminates the secondary network round-trip overhead entirely. The `dialogue_manager/intent_classifier.py` is kept as a reference and local fallback option.
+Because of the sub-500ms budget target for human voice interactions, we have **folded the intent classification and slot extraction tasks directly into the main dialogue LLM (openai/gpt-4o-mini via AICredits) turn call**, eliminating secondary network round-trip latency overhead. The `dialogue_manager/intent_classifier.py` is kept as a reference and local fallback option.
 
 ## 5. Barge-In / Interruption Implementation Detail
 1. STT streams interim transcripts continuously, even while agent TTS is playing (full-duplex audio required — not push-to-talk).

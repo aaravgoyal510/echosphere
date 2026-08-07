@@ -1,4 +1,5 @@
 import json
+import asyncio
 import logging
 from typing import Tuple, List, Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
@@ -15,7 +16,8 @@ from dialogue_manager.models import (
 )
 from dialogue_manager.session_state import SessionStateManager
 from dialogue_manager.guardrails import verify_response_grounding
-from llm.claude_client import ClaudeClient
+from dialogue_manager.escalation_engine import EscalationPolicy
+from llm.dialogue_llm_client import DialogueLLMClient
 from llm.system_prompt import get_system_prompt
 from llm.tools_schema import TOOLS
 from integrations.db_manager import DBManager
@@ -64,10 +66,56 @@ class DialogueManager:
         
         self.pricing_service = PricingService(db_manager)
         self.kb_search = KBSearchService(db_manager)
-        self.claude_client = ClaudeClient(model_name=model_name)
+        self.dialogue_llm_client = DialogueLLMClient(model_name=model_name)
         
         self.get_system_prompt = get_system_prompt
         self.tools_definition = TOOLS
+        self.escalation_policy = EscalationPolicy()
+
+    async def _get_active_objection_playbook(self, state: SessionState) -> Optional[str]:
+        """Finds the first active objection and retrieves its playbook from the KB (with static fallback)."""
+        active_objections = [obj for obj in state.objections if not obj.resolved]
+        if not active_objections:
+            return None
+            
+        obj_type = active_objections[0].type
+        try:
+            docs = await self.kb_search.search_product_kb(
+                query=f"{obj_type} objection",
+                doc_type="playbook",
+                limit=1
+            )
+            if docs:
+                doc = docs[0]
+                if obj_type in doc.title.lower() or obj_type in doc.content.lower():
+                    return doc.content
+        except Exception as e:
+            logger.warning(f"Failed to query objection playbook from KB: {e}")
+            
+        # Standard structural playbooks (Acknowledge -> Reframe -> Check-in -> Advance) with NO digits to prevent guardrail trips
+        static_playbooks = {
+            "pricing": (
+                "Structure for handling pricing objections: First, Acknowledge: Validate the customer's concern about cost. "
+                "Second, Reframe/Evidence: Highlight the value of the platform, such as the natural conversation flow, "
+                "automated qualifications, and custom onboarding fee waivers for larger teams. "
+                "Third, Check-in: Ask if the explanation makes sense. "
+                "Fourth, Advance: Propose the next logical step, such as booking a demo to see the system in action."
+            ),
+            "competitor": (
+                "Structure for handling competitor comparisons: First, Acknowledge: Validate the customer's choice to compare options. "
+                "Second, Reframe/Evidence: Introduce our key differentiators: natural turn-taking with low latency, real-time barge-in, "
+                "and custom onboarding fee waivers for large teams. "
+                "Third, Check-in: Ask if they would like to explore these features. "
+                "Fourth, Advance: Suggest scheduling a demo to see the direct CRM integrations."
+            ),
+            "timeline": (
+                "Structure for handling timeline/delay objections: First, Acknowledge: Validate that timing is important. "
+                "Second, Reframe/Evidence: Explain that setting up early prevents deployment bottlenecks and allows immediate qualification. "
+                "Third, Check-in: Ask if they have a specific target start date. "
+                "Fourth, Advance: Propose scheduling a brief demo or follow-up call."
+            )
+        }
+        return static_playbooks.get(obj_type)
 
     async def handle_turn(
         self,
@@ -78,101 +126,163 @@ class DialogueManager:
         Processes a single conversation turn from the customer.
         Runs the LLM loop, executes any requested tools, runs guardrails, and saves/returns the new state.
         """
-        # 1. Record customer turn in transcript
-        turn_id = len(state.transcript) + 1
-        state.transcript.append(TranscriptTurn(
-            turn_id=turn_id,
-            speaker="customer",
-            text=customer_text,
-            timestamp=datetime.now(timezone.utc).isoformat()
-        ))
-        
-        # 2. Build Anthropic prompt message context
-        llm_messages = transcript_to_llm_messages(state.transcript)
-        
-        all_tool_calls_this_turn = []
-        max_loops = 5
-        
-        for loop_idx in range(max_loops):
-            # Query LLM
-            assistant_text, tool_calls = await self.claude_client.query(
-                system_prompt=self.get_system_prompt(state),
-                messages=llm_messages,
-                tools=self.tools_definition
+        try:
+            # Fetch objection playbook if active
+            objection_playbook = await self._get_active_objection_playbook(state)
+
+            # 1. Record customer turn in transcript
+            turn_id = len(state.transcript) + 1
+            state.transcript.append(TranscriptTurn(
+                turn_id=turn_id,
+                speaker="customer",
+                text=customer_text,
+                timestamp=datetime.now(timezone.utc).isoformat()
+            ))
+
+            # Run escalation policy check
+            should_esc, esc_reason, esc_mode = self.escalation_policy.evaluate(
+                state=state,
+                last_customer_text=customer_text,
+                guardrail_failures_this_turn=0
             )
-            
-            # Scenario A: No tool calls. This is the final text response.
-            if not tool_calls:
-                final_text = assistant_text or "I understand."
+            if should_esc:
+                logger.info(f"EscalationPolicy triggered: {esc_reason} (mode: {esc_mode})")
+                await self.execute_tool("trigger_escalation", {
+                    "call_id": state.call_id,
+                    "reason": esc_reason,
+                    "mode": esc_mode
+                }, state)
                 
-                # Check anti-hallucination guardrail
-                is_grounded, reprompt_msg = verify_response_grounding(final_text, all_tool_calls_this_turn, state.executed_tools)
-                if not is_grounded and reprompt_msg:
-                    # Guardrail failed: Append draft and reprompt to history, then re-query
-                    llm_messages.append({"role": "assistant", "content": final_text})
-                    llm_messages.append({"role": "user", "content": reprompt_msg})
-                    logger.warning("Guardrail violation detected! Requesting model to regenerate...")
-                    continue
+                if esc_mode == "warm_transfer":
+                    esc_msg = "I'll be happy to get a human specialist to assist you further. Let me transfer you now."
+                else:
+                    esc_msg = "I'll have a senior member of our team follow up with you by email or phone first thing tomorrow to help with these details. Thank you!"
                     
-                # Guardrail passed: Save final agent response in transcript
                 state.transcript.append(TranscriptTurn(
                     turn_id=len(state.transcript) + 1,
                     speaker="agent",
-                    text=final_text,
+                    text=esc_msg,
                     timestamp=datetime.now(timezone.utc).isoformat()
                 ))
-                
                 self.session_manager.save_session(state)
-                return final_text, state
-                
-            # Scenario B: Tool calls present. Execute them.
-            # Format OpenAI-compatible assistant message containing tool calls
-            openai_tool_calls = []
-            for tc in tool_calls:
-                openai_tool_calls.append({
-                    "id": tc["id"],
-                    "type": "function",
-                    "function": {
-                        "name": tc["name"],
-                        "arguments": json.dumps(tc["input"])
-                    }
-                })
+                return esc_msg, state
             
-            assistant_msg = {"role": "assistant"}
-            if assistant_text:
-                assistant_msg["content"] = assistant_text
-            else:
-                assistant_msg["content"] = None
-            assistant_msg["tool_calls"] = openai_tool_calls
-            llm_messages.append(assistant_msg)
+            # 2. Build Anthropic prompt message context
+            llm_messages = transcript_to_llm_messages(state.transcript)
             
-            # Execute tools and append outcomes
-            for tc in tool_calls:
-                all_tool_calls_this_turn.append(tc)
-                result = await self.execute_tool(tc["name"], tc["input"], state)
+            all_tool_calls_this_turn = []
+            max_loops = 5
+            guardrail_failures = 0
+            
+            for loop_idx in range(max_loops):
+                # Query LLM
+                assistant_text, tool_calls = await self.dialogue_llm_client.query(
+                    system_prompt=self.get_system_prompt(state, objection_playbook=objection_playbook),
+                    messages=llm_messages,
+                    tools=self.tools_definition
+                )
                 
-                # If tool succeeded, record in history
-                if isinstance(result, dict) and "error" not in result:
-                    if tc["name"] not in state.executed_tools:
-                        state.executed_tools.append(tc["name"])
+                # Scenario A: No tool calls. This is the final text response.
+                if not tool_calls:
+                    final_text = assistant_text or "I understand."
+                    
+                    # Check anti-hallucination guardrail
+                    is_grounded, reprompt_msg = verify_response_grounding(final_text, all_tool_calls_this_turn, state.executed_tools)
+                    if not is_grounded and reprompt_msg:
+                        guardrail_failures += 1
+                        if guardrail_failures >= self.escalation_policy.guardrail_blocks_threshold:
+                            logger.warning("Guardrail blocks threshold reached. Triggering escalation.")
+                            esc_mode = self.escalation_policy.determine_escalation_mode(state)
+                            await self.execute_tool("trigger_escalation", {
+                                "call_id": state.call_id,
+                                "reason": "repeated_guardrail_blocks",
+                                "mode": esc_mode
+                            }, state)
+                            
+                            if esc_mode == "warm_transfer":
+                                esc_msg = "I'll be happy to get a human specialist to assist you further. Let me transfer you now."
+                            else:
+                                esc_msg = "I'll have a senior member of our team follow up with you by email or phone first thing tomorrow to help with these details. Thank you!"
+                                
+                            state.transcript.append(TranscriptTurn(
+                                turn_id=len(state.transcript) + 1,
+                                speaker="agent",
+                                text=esc_msg,
+                                timestamp=datetime.now(timezone.utc).isoformat()
+                            ))
+                            self.session_manager.save_session(state)
+                            return esc_msg, state
+
+                        # Guardrail failed: Append draft and reprompt to history, then re-query
+                        llm_messages.append({"role": "assistant", "content": final_text})
+                        llm_messages.append({"role": "user", "content": reprompt_msg})
+                        logger.warning("Guardrail violation detected! Requesting model to regenerate...")
+                        continue
                         
-                llm_messages.append({
-                    "role": "tool",
-                    "tool_call_id": tc["id"],
-                    "name": tc["name"],
-                    "content": json.dumps(result)
-                })
-            
-        # Fallback if loop exceeded max execution turns
-        fallback_msg = "Let me make sure I have all the correct info. How can I help you next?"
-        state.transcript.append(TranscriptTurn(
-            turn_id=len(state.transcript) + 1,
-            speaker="agent",
-            text=fallback_msg,
-            timestamp=datetime.now(timezone.utc).isoformat()
-        ))
-        self.session_manager.save_session(state)
-        return fallback_msg, state
+                    # Guardrail passed: Save final agent response in transcript
+                    state.transcript.append(TranscriptTurn(
+                        turn_id=len(state.transcript) + 1,
+                        speaker="agent",
+                        text=final_text,
+                        timestamp=datetime.now(timezone.utc).isoformat()
+                    ))
+                    
+                    self.session_manager.save_session(state)
+                    return final_text, state
+                    
+                # Scenario B: Tool calls present. Execute them.
+                # Format OpenAI-compatible assistant message containing tool calls
+                openai_tool_calls = []
+                for tc in tool_calls:
+                    openai_tool_calls.append({
+                        "id": tc["id"],
+                        "type": "function",
+                        "function": {
+                            "name": tc["name"],
+                            "arguments": json.dumps(tc["input"])
+                        }
+                    })
+                
+                assistant_msg = {"role": "assistant"}
+                if assistant_text:
+                    assistant_msg["content"] = assistant_text
+                else:
+                    assistant_msg["content"] = None
+                assistant_msg["tool_calls"] = openai_tool_calls
+                llm_messages.append(assistant_msg)
+                
+                # Execute tools and append outcomes
+                for tc in tool_calls:
+                    all_tool_calls_this_turn.append(tc)
+                    # Shield tool execution to prevent partial updates and data loss on barge-in
+                    result = await asyncio.shield(self.execute_tool(tc["name"], tc["input"], state))
+                    
+                    # If tool succeeded, record in history
+                    if isinstance(result, dict) and "error" not in result:
+                        if tc["name"] not in state.executed_tools:
+                            state.executed_tools.append(tc["name"])
+                            
+                    llm_messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc["id"],
+                        "name": tc["name"],
+                        "content": json.dumps(result)
+                    })
+                
+            # Fallback if loop exceeded max execution turns
+            fallback_msg = "Let me make sure I have all the correct info. How can I help you next?"
+            state.transcript.append(TranscriptTurn(
+                turn_id=len(state.transcript) + 1,
+                speaker="agent",
+                text=fallback_msg,
+                timestamp=datetime.now(timezone.utc).isoformat()
+            ))
+            self.session_manager.save_session(state)
+            return fallback_msg, state
+        except asyncio.CancelledError:
+            logger.info("handle_turn was cancelled mid-flight. Saving current session state to DB.")
+            self.session_manager.save_session(state)
+            raise
 
     async def execute_tool(
         self,
@@ -276,7 +386,7 @@ class DialogueManager:
                 window_end = args.get("window_end")
                 meeting_type = args.get("meeting_type")
                 slots = self.calendar_adapter.get_calendar_availability(window_start, window_end, meeting_type)
-                return {"available_slots": [s.model_dump() for s in slots]}
+                return {"available_slots": [s.model_dump() if hasattr(s, "model_dump") else s for s in slots]}
                 
             elif name == "book_meeting":
                 lead_id = args.get("lead_id")
@@ -289,10 +399,10 @@ class DialogueManager:
                     slot_start=slot_start,
                     slot_end=slot_end,
                     meeting_type=meeting_type,
-                    attendees=["customer@example.com"]
+                    notes="Attendees: customer@example.com"
                 )
                 state.outcome = "meeting_booked"
-                return booking.model_dump()
+                return booking.model_dump() if hasattr(booking, "model_dump") else booking
                 
             elif name == "create_follow_up_task":
                 lead_id = args.get("lead_id")
@@ -336,6 +446,30 @@ class DialogueManager:
                         human_phone_or_sip="sip:human_agent@echosphere",
                         briefing_card=briefing_card
                     )
+                elif mode == "async_handoff":
+                    priority = "high"
+                    if state.qualification.team_size and state.qualification.team_size.value and state.qualification.team_size.value >= 50:
+                        priority = "urgent"
+                    due_at = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+                    
+                    transcript_summary = "\n".join([f"{t.speaker}: {t.text}" for t in state.transcript[-10:]])
+                    context_summary = (
+                        f"Escalation Reason: {reason}. "
+                        f"Qualification: {state.qualification.model_dump()}. "
+                        f"Objections: {[o.model_dump() for o in state.objections]}. "
+                        f"Recent turns:\n{transcript_summary}"
+                    )
+                    
+                    task = FollowUpTask(
+                        task_id=f"tsk_{int(datetime.now(timezone.utc).timestamp())}",
+                        lead_id=state.caller.get("crm_lead_id") or "lead_unknown",
+                        reason=reason,
+                        priority=priority,
+                        due_at=due_at,
+                        context_summary=context_summary,
+                        full_transcript_url="http://example.com/transcripts"
+                    )
+                    self.crm_adapter.create_follow_up_task(state.caller.get("crm_lead_id") or "lead_unknown", task)
                 
                 state.escalation = SessionEscalationState(
                     triggered=True,

@@ -1,8 +1,9 @@
 import asyncio
 import logging
+from datetime import datetime, timezone, timedelta
 from typing import Optional, AsyncIterator
 from dialogue_manager.dialogue_manager import DialogueManager
-from dialogue_manager.models import SessionState
+from dialogue_manager.models import SessionState, CallLogEntry
 from pipeline.simulated_pipeline import SimulatedSTTAdapter, SimulatedTTSAdapter, TurnTakingManager
 
 logger = logging.getLogger(__name__)
@@ -121,3 +122,57 @@ class PipelineCoordinator:
                 self.dialogue_manager.interrupt_agent_turn(fresh_state, spoken_words)
                 self.current_state = fresh_state
                 logger.info(f"[PipelineCoordinator] Truncated agent turn. Spoken portion: '{spoken_words}'")
+
+    def end_call(self, default_outcome: str = "disqualified") -> None:
+        """
+        Explicitly ends the active call session. 
+        Ensures a CallLogEntry is generated and logged to the CRM and local DB.
+        """
+        if not self.call_id or not self.current_state:
+            return
+            
+        try:
+            state = self.current_state
+            
+            # Map outcome: if outcome is "in_progress", default it to default_outcome
+            if state.outcome == "in_progress" or not state.outcome:
+                if state.escalation.triggered:
+                    state.outcome = "escalated"
+                else:
+                    state.outcome = default_outcome
+            
+            # Save latest state outcome
+            self.dialogue_manager.session_manager.save_session(state)
+            self.current_state = state
+            
+            # Enforce CallLogEntry writing
+            now_str = datetime.now(timezone.utc).isoformat()
+            
+            # Calculate duration
+            started = datetime.fromisoformat(state.started_at.replace('Z', '+00:00'))
+            ended = datetime.now(timezone.utc)
+            duration_sec = (ended - started).total_seconds()
+            
+            # Transcript summary
+            summary_txt = f"Call completed. Transcript contains {len(state.transcript)} turns."
+            if state.transcript:
+                summary_txt += f" Last turn: '{state.transcript[-1].text}'"
+                
+            entry = CallLogEntry(
+                call_id=state.call_id,
+                lead_id=state.caller.get("crm_lead_id") or "lead_unknown",
+                started_at=state.started_at,
+                ended_at=now_str,
+                duration_sec=duration_sec,
+                transcript_url="http://example.com/transcripts/" + state.call_id,
+                summary=summary_txt,
+                objections_raised=state.objections,
+                outcome=state.outcome,
+                escalation_reason=state.escalation.reason if state.escalation.triggered else None
+            )
+            
+            # Log call entry to CRM (which also updates local mock DB)
+            self.dialogue_manager.crm_adapter.log_call_entry(entry)
+            logger.info(f"[PipelineCoordinator] Saved CallLogEntry for call {self.call_id} with outcome: {state.outcome}")
+        except Exception as e:
+            logger.error(f"[PipelineCoordinator] Error ending call: {e}")
