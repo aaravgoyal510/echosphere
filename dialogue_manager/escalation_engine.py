@@ -66,10 +66,16 @@ class EscalationPolicy:
         Determines routing: warm_transfer for live business hours,
         async_handoff for weekends, off-hours, or low-urgency.
         """
-        now = datetime.now(timezone.utc)
-        is_weekday = now.weekday() < 5
-        # Standard office hours: 9 AM to 5 PM UTC
-        is_business_hours = 9 <= now.hour < 17
+        # Standard office hours: 9 AM to 5 PM local timezone (Asia/Kolkata)
+        import zoneinfo
+        try:
+            tz = zoneinfo.ZoneInfo("Asia/Kolkata")
+            local_now = datetime.now(timezone.utc).astimezone(tz)
+        except Exception:
+            local_now = datetime.now(timezone.utc)
+            
+        is_weekday = local_now.weekday() < 5
+        is_business_hours = 9 <= local_now.hour < 17
 
         # Urgent flag: large deal sizes (>= 50 seats) are treated as urgent
         is_urgent = False

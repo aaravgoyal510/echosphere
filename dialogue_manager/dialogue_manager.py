@@ -174,10 +174,16 @@ class DialogueManager:
             max_loops = 5
             guardrail_failures = 0
             
+            # Fetch historical summary if repeat lead
+            historical_summary = None
+            lead_id = state.caller.get("crm_lead_id")
+            if lead_id:
+                historical_summary = self.db.get_lead_summary(lead_id)
+
             for loop_idx in range(max_loops):
                 # Query LLM
                 assistant_text, tool_calls = await self.dialogue_llm_client.query(
-                    system_prompt=self.get_system_prompt(state, objection_playbook=objection_playbook),
+                    system_prompt=self.get_system_prompt(state, objection_playbook=objection_playbook, historical_summary=historical_summary),
                     messages=llm_messages,
                     tools=self.tools_definition
                 )
@@ -187,8 +193,9 @@ class DialogueManager:
                     final_text = assistant_text or "I understand."
                     
                     # Check anti-hallucination guardrail
-                    is_grounded, reprompt_msg = verify_response_grounding(final_text, all_tool_calls_this_turn, state.executed_tools)
+                    is_grounded, reprompt_msg = verify_response_grounding(final_text, all_tool_calls_this_turn, state.executed_tools, state)
                     if not is_grounded and reprompt_msg:
+                        state.guardrail_trigger_count += 1
                         guardrail_failures += 1
                         if guardrail_failures >= self.escalation_policy.guardrail_blocks_threshold:
                             logger.warning("Guardrail blocks threshold reached. Triggering escalation.")

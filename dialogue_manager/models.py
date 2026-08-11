@@ -63,6 +63,7 @@ class SessionState(BaseModel):
     escalation: SessionEscalationState = Field(default_factory=SessionEscalationState)
     outcome: Optional[Literal["meeting_booked", "follow_up_scheduled", "disqualified", "escalated", "in_progress"]] = "in_progress"
     executed_tools: List[str] = Field(default_factory=list)
+    guardrail_trigger_count: int = 0
 
 # Schema.md §2: Product / Pricing Knowledge Base
 class KBDocument(BaseModel):

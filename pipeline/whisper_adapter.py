@@ -74,6 +74,12 @@ class WhisperSTTAdapter(STTAdapter):
             # Convert 16-bit PCM bytes to float32 numpy array
             audio_np = np.frombuffer(raw_audio, dtype=np.int16).astype(np.float32) / 32768.0
             
+            # Filter out near-silent segments to prevent Whisper hallucinations
+            energy = float(np.sqrt(np.mean(audio_np ** 2))) if len(audio_np) > 0 else 0.0
+            if energy < 0.007:
+                logger.info(f"[Whisper STT] Skipping near-silent segment (energy={energy:.5f} < 0.007)")
+                return
+
             # Run transcription in a background thread to keep event loop responsive
             segments, info = await asyncio.to_thread(
                 self.model.transcribe,

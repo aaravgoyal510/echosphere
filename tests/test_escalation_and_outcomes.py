@@ -230,6 +230,25 @@ async def test_outcome_disqualified(test_context):
 
 
 @pytest.mark.asyncio
+async def test_outcome_technical_failure_resolves_to_escalated(test_context):
+    db, session_manager, manager, state = test_context
+    coordinator = PipelineCoordinator(manager, MagicMock(), MagicMock(), MagicMock())
+    coordinator.start_call(state.call_id)
+    coordinator.current_state = state
+    
+    # End call ungracefully (simulating connection drop / technical timeout)
+    coordinator.end_call(graceful=False)
+    
+    conn = db.get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT outcome, escalation_reason FROM call_log_entries WHERE call_id = ?", (state.call_id,))
+    row = cur.fetchone()
+    assert row["outcome"] == "escalated"
+    assert "Abrupt" in row["escalation_reason"]
+    conn.close()
+
+
+@pytest.mark.asyncio
 async def test_outcome_escalated_and_context_transfer(test_context):
     db, session_manager, manager, state = test_context
     coordinator = PipelineCoordinator(manager, MagicMock(), MagicMock(), MagicMock())

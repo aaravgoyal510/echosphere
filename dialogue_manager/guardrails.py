@@ -13,7 +13,8 @@ DAYS_OF_WEEK = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturda
 def verify_response_grounding(
     response_text: str,
     tool_calls: List[Dict[str, Any]],
-    executed_tools_history: Optional[List[str]] = None
+    executed_tools_history: Optional[List[str]] = None,
+    state: Optional[Any] = None
 ) -> Tuple[bool, Optional[str]]:
     """
     Deterministically verifies if any price, slot, competitor name, or onboarding fee mentioned
@@ -138,5 +139,41 @@ def verify_response_grounding(
             )
             logger.warning(f"Guardrail check failed: Escalation mismatch. Response: '{response_text}'")
             return False, msg
+
+    # 6. Customer History & Competitor Attribution Check
+    attribution_phrases = [
+        "you mentioned", "you said", "you currently use", "noted that you",
+        "you are currently using", "your current solution", "since you use",
+        "as you mentioned", "i've noted that"
+    ]
+    has_attribution = any(phrase in text_lower for phrase in attribution_phrases)
+    
+    competitors = ["hubspot", "salesforce", "pipedrive", "zoho"]
+    mentioned_competitors = [comp for comp in competitors if comp in text_lower]
+    
+    if state and (has_attribution or mentioned_competitors):
+        current_sol = ""
+        if state.qualification and state.qualification.current_solution and state.qualification.current_solution.value:
+            current_sol = str(state.qualification.current_solution.value).lower()
+            
+        customer_mentioned_competitor = False
+        transcript_history = getattr(state, "transcript", []) or []
+        for turn in transcript_history:
+            if turn.speaker in ("customer", "human_agent") and turn.text:
+                turn_text_lower = turn.text.lower()
+                for comp in mentioned_competitors:
+                    if comp in turn_text_lower:
+                        customer_mentioned_competitor = True
+                        break
+                        
+        for comp in mentioned_competitors:
+            if comp != current_sol and not customer_mentioned_competitor:
+                msg = (
+                    f"You referenced competitor '{comp}' or attributed it to the customer, but the customer has not "
+                    "mentioned this competitor and it is not documented in the qualification current_solution. "
+                    "Do not fabricate customer information or introduce unauthorized competitor comparisons."
+                )
+                logger.warning(f"Guardrail check failed: Fabricated customer competitor attribution. Response: '{response_text}'")
+                return False, msg
 
     return True, None

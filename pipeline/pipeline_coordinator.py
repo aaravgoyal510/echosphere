@@ -123,7 +123,7 @@ class PipelineCoordinator:
                 self.current_state = fresh_state
                 logger.info(f"[PipelineCoordinator] Truncated agent turn. Spoken portion: '{spoken_words}'")
 
-    def end_call(self, default_outcome: str = "disqualified") -> None:
+    def end_call(self, default_outcome: str = "disqualified", graceful: bool = True) -> None:
         """
         Explicitly ends the active call session. 
         Ensures a CallLogEntry is generated and logged to the CRM and local DB.
@@ -136,8 +136,11 @@ class PipelineCoordinator:
             
             # Map outcome: if outcome is "in_progress", default it to default_outcome
             if state.outcome == "in_progress" or not state.outcome:
-                if state.escalation.triggered:
+                if state.escalation.triggered or not graceful:
                     state.outcome = "escalated"
+                    if not graceful and not state.escalation.triggered:
+                        state.escalation.triggered = True
+                        state.escalation.reason = "Abrupt call disconnection / dropped line"
                 else:
                     state.outcome = default_outcome
             
@@ -171,8 +174,74 @@ class PipelineCoordinator:
                 escalation_reason=state.escalation.reason if state.escalation.triggered else None
             )
             
-            # Log call entry to CRM (which also updates local mock DB)
+             # Log call entry to CRM (which also updates local mock DB)
             self.dialogue_manager.crm_adapter.log_call_entry(entry)
             logger.info(f"[PipelineCoordinator] Saved CallLogEntry for call {self.call_id} with outcome: {state.outcome}")
+
+            # Persist deterministic call stats
+            objections_raised = len(state.objections)
+            objections_resolved = len([obj for obj in state.objections if obj.resolved])
+            guardrail_triggers = getattr(state, "guardrail_trigger_count", 0)
+            
+            competitors = []
+            for obj in state.objections:
+                if obj.type == "competitor" and obj.detail:
+                    competitors.append(obj.detail)
+            competitors_str = ",".join(competitors) if competitors else None
+            
+            team_size = None
+            if state.qualification.team_size and state.qualification.team_size.value is not None:
+                try:
+                    team_size = int(state.qualification.team_size.value)
+                except Exception:
+                    pass
+                    
+            self.dialogue_manager.db.save_call_stats(
+                call_id=state.call_id,
+                timestamp=state.started_at,
+                outcome=state.outcome,
+                objections_raised=objections_raised,
+                objections_resolved=objections_resolved,
+                guardrail_triggers=guardrail_triggers,
+                team_size=team_size,
+                competitors_mentioned=competitors_str,
+                duration_seconds=duration_sec
+            )
+
+            # Generate and save lead summary for repeat customer context
+            lead_id = state.caller.get("crm_lead_id")
+            if lead_id and lead_id != "lead_unknown" and state.outcome != "disqualified":
+                asyncio.create_task(self._generate_and_save_lead_summary(state))
+
         except Exception as e:
             logger.error(f"[PipelineCoordinator] Error ending call: {e}")
+
+    async def _generate_and_save_lead_summary(self, state: SessionState) -> None:
+        try:
+            lead_id = state.caller.get("crm_lead_id")
+            if not lead_id or not state.transcript:
+                return
+            
+            transcript_txt = ""
+            for turn in state.transcript:
+                transcript_txt += f"{turn.speaker}: {turn.text}\n"
+                
+            prompt = (
+                "Summarize the following sales call transcript in 2-3 sentences. "
+                "Highlight key requirements, objections raised/resolved, and agreed next steps.\n\n"
+                f"Transcript:\n{transcript_txt}"
+            )
+            
+            system_prompt = (
+                "You are an expert CRM assistant. Write a brief, punchy call summary for the lead's profile. "
+                "Do not include greeting or introductory text. Speak directly in 2-3 sentences."
+            )
+            response_text, _ = await self.dialogue_manager.dialogue_llm_client.query(
+                system_prompt=system_prompt,
+                user_message=prompt
+            )
+            
+            self.dialogue_manager.db.save_lead_summary(lead_id, response_text.strip())
+            logger.info(f"[PipelineCoordinator] Saved lead summary for {lead_id}: {response_text.strip()}")
+        except Exception as e:
+            logger.error(f"[PipelineCoordinator] Error generating lead summary: {e}")

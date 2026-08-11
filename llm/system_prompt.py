@@ -15,7 +15,11 @@ Rules:
 
 Competitor Rule: If customer mentions a competitor (e.g. HubSpot, Salesforce): call log_call_event (objection_raised), search_product_kb (query="competitor comparison"), and update_lead_qualification (current_solution=competitor)."""
 
-def get_system_prompt(state: SessionState, objection_playbook: Optional[str] = None) -> str:
+def get_system_prompt(
+    state: SessionState, 
+    objection_playbook: Optional[str] = None,
+    historical_summary: Optional[str] = None
+) -> str:
     """Builds a condensed dynamic prompt containing call metadata, qualification memory, and optional playbook guidance."""
     qual = [f"{k}={v.value}" for k, v in state.qualification.__dict__.items() if v and hasattr(v, 'value')]
     qual_str = ", ".join(qual) if qual else "None"
@@ -32,6 +36,9 @@ def get_system_prompt(state: SessionState, objection_playbook: Optional[str] = N
 - Call ID: {state.call_id} | Lead ID: {lead_id} | Phone: {phone}
 - CRM Status: {qual_str}
 - Objections: Active={active or 'None'}, Resolved={resolved or 'None'}"""
+
+    if historical_summary:
+        prompt += f"\n\n### Historical Context (Summary of previous call with this customer):\n{historical_summary}"
 
     if objection_playbook:
         prompt += f"\n\n### Objection Playbook Guidance (MUST follow this strategy):\n{objection_playbook}"

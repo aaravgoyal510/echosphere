@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EchoSphere – Voice Sales Agent Platform</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="sidebar">
+            <div class="logo">
+                <span class="logo-icon">🪐</span>
+                <h2>EchoSphere</h2>
+            </div>
+            <nav class="nav-menu">
+                <button class="nav-btn active" onclick="switchTab('sandbox')">🎙️ Live Sandbox</button>
+                <button class="nav-btn" onclick="switchTab('admin')">⚙️ Admin Console</button>
+                <button class="nav-btn" onclick="switchTab('learning')">🧠 Pattern Learning</button>
+            </nav>
+        </aside>
+
+        <!-- Main Body -->
+        <main class="main-content">
+            <!-- Sandbox Tab -->
+            <section id="tab-sandbox" class="tab-content active">
+                <div class="header">
+                    <h1>Live Call Sandbox</h1>
+                    <div id="outage-banner" class="banner hidden">🚨 SYSTEM OUTAGE ACTIVE: Transferring to human AE...</div>
+                </div>
+
+                <div class="sandbox-grid">
+                    <!-- Column 1: Control & Transcript -->
+                    <div class="card transcript-card">
+                        <div class="card-header">
+                            <h3>Conversation Stream</h3>
+                            <div id="barge-indicator" class="indicator">BARGE-IN DETECTED</div>
+                        </div>
+                        <div id="transcript-box" class="transcript-box">
+                            <div class="system-msg">Press "Start Demo Call" to initialize connection.</div>
+                        </div>
+                        <div class="chat-input-container" style="display: flex; gap: 0.5rem; margin-bottom: 1.25rem;">
+                            <input type="text" id="chat-input-field" placeholder="Or type customer turn here..." onkeydown="if(event.key==='Enter') sendChatMessage()" style="flex: 1; background: rgba(15, 23, 42, 0.5); border: 1px solid var(--card-border); color: var(--text-primary); padding: 0.7rem 0.85rem; border-radius: 6px; font-size: 0.9rem;" disabled>
+                            <button id="btn-send-chat" class="btn btn-secondary" onclick="sendChatMessage()" disabled>Send</button>
+                        </div>
+                        <div class="controls">
+                            <button id="btn-call" class="btn btn-primary" onclick="toggleCall()">Start Demo Call</button>
+                            <button id="btn-record" class="btn btn-secondary" onclick="toggleRecording()" disabled>Record Session (Tab+Mic)</button>
+                        </div>
+                    </div>
+
+                    <!-- Column 2: Live State Panel -->
+                    <div class="card state-card">
+                        <h3>Live Lead State</h3>
+                        
+                        <div class="state-group">
+                            <h4>Qualification Snapshot</h4>
+                            <div class="qual-grid">
+                                <div class="qual-item">
+                                    <span class="label">Team Size</span>
+                                    <span id="state-seats" class="val">-</span>
+                                </div>
+                                <div class="qual-item">
+                                    <span class="label">Competitor</span>
+                                    <span id="state-competitor" class="val">-</span>
+                                </div>
+                                <div class="qual-item">
+                                    <span class="label">Timeline</span>
+                                    <span id="state-timeline" class="val">-</span>
+                                </div>
+                                <div class="qual-item">
+                                    <span class="label">Tier Discussed</span>
+                                    <span id="state-tier" class="val">-</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="state-group">
+                            <h4>Active Objections</h4>
+                            <div id="objections-list" class="objections-list">
+                                <div class="no-data">No objections raised yet.</div>
+                            </div>
+                        </div>
+
+                        <div class="state-group">
+                            <h4>Current Outcome</h4>
+                            <div id="outcome-badge" class="outcome-badge outcome-progress">IN PROGRESS</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Admin Console Tab -->
+            <section id="tab-admin" class="tab-content">
+                <div class="header">
+                    <h1>Admin Configuration Console</h1>
+                </div>
+
+                <div class="admin-grid">
+                    <!-- Pricing Tiers CRUD -->
+                    <div class="card crud-card">
+                        <h3>Pricing Tiers Configuration</h3>
+                        <div class="form-container">
+                            <input type="text" id="price-id" placeholder="Tier ID (starter, business, etc.)">
+                            <input type="text" id="price-name" placeholder="Tier Name">
+                            <input type="number" id="price-min" placeholder="Min Seats">
+                            <input type="number" id="price-max" placeholder="Max Seats">
+                            <input type="number" step="0.01" id="price-rate" placeholder="Rate/Seat/Mo ($)">
+                            <input type="number" step="0.01" id="price-onboarding" placeholder="Onboarding Fee ($)">
+                            <input type="text" id="price-features" placeholder="Features (comma separated)">
+                            <button class="btn btn-primary" onclick="savePricingTier()">Save Pricing Tier</button>
+                        </div>
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Name</th>
+                                    <th>Min/Max</th>
+                                    <th>Rate</th>
+                                    <th>Onboarding</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="pricing-table-body"></tbody>
+                        </table>
+                    </div>
+
+                    <!-- KB Documents CRUD -->
+                    <div class="card crud-card">
+                        <h3>Knowledge Base Documents</h3>
+                        <div class="form-container">
+                            <input type="text" id="kb-id" placeholder="Doc ID">
+                            <input type="text" id="kb-title" placeholder="Document Title">
+                            <select id="kb-type">
+                                <option value="feature_doc">Feature Doc</option>
+                                <option value="competitive_battlecard">Competitive Battlecard</option>
+                                <option value="policy">Policy / Guideline</option>
+                                <option value="playbook">Objection Playbook</option>
+                            </select>
+                            <input type="text" id="kb-competitor" placeholder="Competitor Name (optional)">
+                            <textarea id="kb-content" placeholder="Content text..."></textarea>
+                            <button class="btn btn-primary" onclick="saveKBDocument()">Save KB Document</button>
+                        </div>
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Title</th>
+                                    <th>Type</th>
+                                    <th>Competitor</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="kb-table-body"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Pattern Learning Tab -->
+            <section id="tab-learning" class="tab-content">
+                <div class="header">
+                    <h1>Cross-Call Pattern Learning Loop</h1>
+                </div>
+
+                <div class="learning-grid">
+                    <div class="card stats-card">
+                        <h3>Deterministic Analytics Snapshot</h3>
+                        <div class="stats-panel">
+                            <div class="stat-box">
+                                <span class="num" id="stat-calls">0</span>
+                                <span class="lbl">Total Call Sessions</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="num" id="stat-objections">0</span>
+                                <span class="lbl">Objections Logged</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="num" id="stat-resolved">0%</span>
+                                <span class="lbl">Resolution Rate</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="num" id="stat-guardrails">0</span>
+                                <span class="lbl">Guardrail Violations</span>
+                            </div>
+                        </div>
+                        <button class="btn btn-secondary" onclick="loadStats()">🔄 Refresh Metrics</button>
+                    </div>
+
+                    <div class="card distill-card">
+                        <h3>Manual Pattern Distillation</h3>
+                        <p>Generate a distilled report analyzing objection-handling success rates and obtain prompt optimization recommendations directly from the LLM based on call logs.</p>
+                        <button class="btn btn-primary" onclick="triggerDistillation()">🧠 Execute Distillation (1 LLM Query)</button>
+                        <div id="distill-loader" class="loader hidden">Analyzing Call Records...</div>
+                        <pre id="distill-output" class="distill-output">No report run yet.</pre>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

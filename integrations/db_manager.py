@@ -5,6 +5,7 @@ import sqlite3
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from typing import List, Dict, Any, Optional
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +158,27 @@ class DBManager:
                     embedding {embedding_type}
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS call_stats (
+                    call_id VARCHAR(50) PRIMARY KEY,
+                    timestamp VARCHAR(50) NOT NULL,
+                    outcome VARCHAR(50) NOT NULL,
+                    objections_raised INTEGER NOT NULL,
+                    objections_resolved INTEGER NOT NULL,
+                    guardrail_triggers INTEGER NOT NULL,
+                    team_size INTEGER,
+                    competitors_mentioned TEXT,
+                    duration_seconds NUMERIC(10, 2) NOT NULL
+                );
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS lead_summaries (
+                    lead_id VARCHAR(50) PRIMARY KEY,
+                    summary TEXT NOT NULL,
+                    updated_at VARCHAR(50) NOT NULL
+                );
+            """)
             logger.info("PostgreSQL tables initialized.")
 
     def _initialize_sqlite(self):
@@ -250,7 +272,241 @@ class DBManager:
                     embedding TEXT -- JSON array of floats
                 );
             """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS call_stats (
+                    call_id TEXT PRIMARY KEY,
+                    timestamp TEXT NOT NULL,
+                    outcome TEXT NOT NULL,
+                    objections_raised INTEGER NOT NULL,
+                    objections_resolved INTEGER NOT NULL,
+                    guardrail_triggers INTEGER NOT NULL,
+                    team_size INTEGER,
+                    competitors_mentioned TEXT,
+                    duration_seconds REAL NOT NULL
+                );
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS lead_summaries (
+                    lead_id TEXT PRIMARY KEY,
+                    summary TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+            """)
             conn.commit()
             logger.info("SQLite tables initialized.")
         finally:
             conn.close()
+
+    def get_all_pricing_tiers(self) -> List[Dict[str, Any]]:
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            if self.use_sqlite:
+                cur.execute("SELECT * FROM pricing_tiers")
+                rows = cur.fetchall()
+                results = []
+                for row in rows:
+                    results.append({
+                        "tier_id": row["tier_id"],
+                        "name": row["name"],
+                        "min_seats": row["min_seats"],
+                        "max_seats": row["max_seats"],
+                        "price_per_seat_monthly": row["price_per_seat_monthly"],
+                        "included_features": json.loads(row["included_features"]) if isinstance(row["included_features"], str) else row["included_features"],
+                        "onboarding_fee": row["onboarding_fee"]
+                    })
+                return results
+            else:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT * FROM pricing_tiers")
+                    return [dict(r) for r in cur.fetchall()]
+        finally:
+            if self.use_sqlite:
+                conn.close()
+
+    def save_pricing_tier(self, tier_id: str, name: str, min_seats: int, max_seats: Optional[int], price_per_seat_monthly: float, included_features: List[str], onboarding_fee: float):
+        conn = self.get_connection()
+        features_json = json.dumps(included_features)
+        try:
+            cur = conn.cursor()
+            if self.use_sqlite:
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO pricing_tiers 
+                    (tier_id, name, min_seats, max_seats, price_per_seat_monthly, included_features, onboarding_fee)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (tier_id, name, min_seats, max_seats, price_per_seat_monthly, features_json, onboarding_fee)
+                )
+                conn.commit()
+            else:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO pricing_tiers 
+                        (tier_id, name, min_seats, max_seats, price_per_seat_monthly, included_features, onboarding_fee)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (tier_id) DO UPDATE SET
+                        name = EXCLUDED.name,
+                        min_seats = EXCLUDED.min_seats,
+                        max_seats = EXCLUDED.max_seats,
+                        price_per_seat_monthly = EXCLUDED.price_per_seat_monthly,
+                        included_features = EXCLUDED.included_features,
+                        onboarding_fee = EXCLUDED.onboarding_fee
+                        """,
+                        (tier_id, name, min_seats, max_seats, price_per_seat_monthly, included_features, onboarding_fee)
+                    )
+        finally:
+            if self.use_sqlite:
+                conn.close()
+
+    def delete_pricing_tier(self, tier_id: str):
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            if self.use_sqlite:
+                cur.execute("DELETE FROM pricing_tiers WHERE tier_id = ?", (tier_id,))
+                conn.commit()
+            else:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM pricing_tiers WHERE tier_id = %s", (tier_id,))
+        finally:
+            if self.use_sqlite:
+                conn.close()
+
+    def get_all_kb_documents(self) -> List[Dict[str, Any]]:
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            if self.use_sqlite:
+                cur.execute("SELECT doc_id, type, title, content, competitor_name, updated_at FROM kb_documents")
+                rows = cur.fetchall()
+                results = []
+                for row in rows:
+                    results.append({
+                        "doc_id": row["doc_id"],
+                        "type": row["type"],
+                        "title": row["title"],
+                        "content": row["content"],
+                        "competitor_name": row["competitor_name"],
+                        "updated_at": row["updated_at"]
+                    })
+                return results
+            else:
+                with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                    cur.execute("SELECT doc_id, type, title, content, competitor_name, updated_at FROM kb_documents")
+                    return [dict(r) for r in cur.fetchall()]
+        finally:
+            if self.use_sqlite:
+                conn.close()
+
+    def delete_kb_document(self, doc_id: str):
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            if self.use_sqlite:
+                cur.execute("DELETE FROM kb_documents WHERE doc_id = ?", (doc_id,))
+                conn.commit()
+            else:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM kb_documents WHERE doc_id = %s", (doc_id,))
+        finally:
+            if self.use_sqlite:
+                conn.close()
+
+    def save_call_stats(
+        self,
+        call_id: str,
+        timestamp: str,
+        outcome: str,
+        objections_raised: int,
+        objections_resolved: int,
+        guardrail_triggers: int,
+        team_size: Optional[int],
+        competitors_mentioned: Optional[str],
+        duration_seconds: float
+    ):
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            if self.use_sqlite:
+                cur.execute(
+                    """
+                    INSERT OR REPLACE INTO call_stats 
+                    (call_id, timestamp, outcome, objections_raised, objections_resolved, 
+                     guardrail_triggers, team_size, competitors_mentioned, duration_seconds)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (call_id, timestamp, outcome, objections_raised, objections_resolved,
+                     guardrail_triggers, team_size, competitors_mentioned, duration_seconds)
+                )
+                conn.commit()
+            else:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO call_stats 
+                        (call_id, timestamp, outcome, objections_raised, objections_resolved, 
+                         guardrail_triggers, team_size, competitors_mentioned, duration_seconds)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        ON CONFLICT (call_id) DO UPDATE SET
+                        timestamp = EXCLUDED.timestamp,
+                        outcome = EXCLUDED.outcome,
+                        objections_raised = EXCLUDED.objections_raised,
+                        objections_resolved = EXCLUDED.objections_resolved,
+                        guardrail_triggers = EXCLUDED.guardrail_triggers,
+                        team_size = EXCLUDED.team_size,
+                        competitors_mentioned = EXCLUDED.competitors_mentioned,
+                        duration_seconds = EXCLUDED.duration_seconds
+                        """,
+                        (call_id, timestamp, outcome, objections_raised, objections_resolved,
+                         guardrail_triggers, team_size, competitors_mentioned, duration_seconds)
+                    )
+        finally:
+            if self.use_sqlite:
+                conn.close()
+
+    def save_lead_summary(self, lead_id: str, summary: str):
+        conn = self.get_connection()
+        now_str = datetime.now(timezone.utc).isoformat()
+        try:
+            cur = conn.cursor()
+            if self.use_sqlite:
+                cur.execute(
+                    "INSERT OR REPLACE INTO lead_summaries (lead_id, summary, updated_at) VALUES (?, ?, ?)",
+                    (lead_id, summary, now_str)
+                )
+                conn.commit()
+            else:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO lead_summaries (lead_id, summary, updated_at) 
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT (lead_id) DO UPDATE SET
+                        summary = EXCLUDED.summary,
+                        updated_at = EXCLUDED.updated_at
+                        """,
+                        (lead_id, summary, now_str)
+                    )
+        finally:
+            if self.use_sqlite:
+                conn.close()
+
+    def get_lead_summary(self, lead_id: str) -> Optional[str]:
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            if self.use_sqlite:
+                cur.execute("SELECT summary FROM lead_summaries WHERE lead_id = ?", (lead_id,))
+                row = cur.fetchone()
+                return row["summary"] if row else None
+            else:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT summary FROM lead_summaries WHERE lead_id = %s", (lead_id,))
+                    row = cur.fetchone()
+                    return row[0] if row else None
+        finally:
+            if self.use_sqlite:
+                conn.close()
